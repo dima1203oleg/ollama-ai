@@ -18,16 +18,20 @@ def check_python_version():
     return version.major == 3 and version.minor >= 9
 
 def check_packages():
-    required = pkg_resources.parse_requirements(open('requirements.txt'))
+    required = {}
+    for req in pkg_resources.parse_requirements(open('requirements.txt')):
+        required[req.key] = str(req.specifier).replace('==', '')
+    
     installed = {pkg.key: pkg.version for pkg in pkg_resources.working_set}
+    
     missing = []
     outdated = []
     
-    for package in required:
-        if package.key not in installed:
-            missing.append(str(package))
-        elif installed[package.key] != package.specifier:
-            outdated.append(f"{package.key} (installed: {installed[package.key]})")
+    for package, version in required.items():
+        if package not in installed:
+            missing.append(f"{package}=={version}")
+        elif installed[package] != version:
+            outdated.append(f"{package} (installed: {installed[package]}, required: {version})")
     
     return missing, outdated
 
@@ -64,7 +68,7 @@ def main():
     table.add_row(
         "Python Packages",
         "✓" if not (missing or outdated) else "✗",
-        f"Missing: {len(missing)}, Outdated: {len(outdated)}"
+        f"Missing: {', '.join(missing) if missing else 'None'}\nOutdated: {', '.join(outdated) if outdated else 'None'}"
     )
 
     # Check Ollama
