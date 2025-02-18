@@ -81,6 +81,22 @@ check_port 5044 # Logstash
 print_status "Starting Docker containers..."
 docker-compose up -d
 
+# Create data directory and customs_data.csv if they don't exist
+print_status "Checking data directory and customs_data.csv..."
+data_dir="./data"
+customs_file="${data_dir}/customs_data.csv"
+
+if [ ! -d "$data_dir" ]; then
+    mkdir -p "$data_dir"
+    print_status "Created data directory"
+fi
+
+if [ ! -f "$customs_file" ]; then
+    # Create customs_data.csv with headers
+    echo "date,product,quantity,value,country,customs,declaration_type,sender,receiver,receiver_code,declaration_number,trading_country,sending_country,delivery_terms,delivery_place,unit,weight_gross,weight_net,customs_weight,special_mark,contract,trademark,product_code,calculated_invoice_value_usd_kg,weight_unit,weight_diff,calculated_customs_value_net_usd_kg,calculated_customs_value_usd_add,calculated_customs_value_gross_usd_kg,min_base_usd_kg,min_base_diff,cz_net_usd_kg,cz_diff_usd_kg,preferential,full" > "$customs_file"
+    print_status "Created empty customs_data.csv with headers"
+fi
+
 # Wait for services to be ready
 print_status "Waiting for services to start (30 seconds)..."
 sleep 30
