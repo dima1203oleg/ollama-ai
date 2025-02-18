@@ -42,8 +42,9 @@ logs/
 logstash/logs/
 
 # Data directory
-data/
-data/**/*
+!data/
+data/*
+!data/.gitkeep
 
 # OpenSearch
 opensearch-data*/
@@ -61,5 +62,6 @@ Thumbs.db
 *.bak
 
 # Input directory
-input/
-input/**/*
+!input/
+input/*
+!input/.gitkeep
