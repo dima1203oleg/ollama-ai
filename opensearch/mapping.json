@@ -1,0 +1,42 @@
+{
+    "mappings": {
+      "properties": {
+        "customs_office": { "type": "keyword" },
+        "declaration_type": { "type": "keyword" },
+        "declaration_number": { "type": "keyword" },
+        "processing_date": { "type": "date" },
+        "sender": { "type": "text" },
+        "recipient_code": { "type": "keyword" },
+        "recipient": { "type": "text" },
+        "item_number": { "type": "integer" },
+        "product_code": { "type": "keyword" },
+        "product_description": { "type": "text" },
+        "trading_country": { "type": "keyword" },
+        "shipping_country": { "type": "keyword" },
+        "origin_country": { "type": "keyword" },
+        "delivery_terms": { "type": "keyword" },
+        "delivery_location": { "type": "text" },
+        "quantity": { "type": "float" },
+        "unit": { "type": "keyword" },
+        "gross_weight": { "type": "float" },
+        "net_weight": { "type": "float" },
+        "customs_weight": { "type": "float" },
+        "invoice_value": { "type": "float" },
+        "special_mark": { "type": "keyword" },
+        "calculated_invoice_value_usd_kg": { "type": "float" },
+        "unit_weight": { "type": "float" },
+        "weight_difference": { "type": "float" },
+        "contract_type": { "type": "keyword" },
+        "trade_mark": { "type": "keyword" },
+        "calculated_customs_value_net_usd_kg": { "type": "float" },
+        "calculated_customs_value_usd_add_unit": { "type": "float" },
+        "calculated_customs_value_gross_usd_kg": { "type": "float" },
+        "min_base_usd_kg": { "type": "float" },
+        "min_base_difference": { "type": "float" },
+        "customs_value_net_usd_kg": { "type": "float" },
+        "customs_value_difference_usd_kg": { "type": "float" },
+        "preferential_rate": { "type": "float" },
+        "full_rate": { "type": "float" }
+      }
+    }
+  }
