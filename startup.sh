@@ -82,8 +82,8 @@ print_status "Starting Docker containers..."
 docker-compose up -d
 
 # Wait for services to be ready
-print_status "Waiting for services to start (60 seconds)..."
-sleep 60
+print_status "Waiting for services to start (30 seconds)..."
+sleep 30
 
 # Run dependency check script
 print_status "Running final dependency check..."
