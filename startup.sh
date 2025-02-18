@@ -95,6 +95,15 @@ else
     exit 1
 fi
 
+# Make all scripts in scripts directory executable
+print_status "Making all scripts executable..."
+if [ -d "./scripts" ]; then
+    chmod +x ./scripts/*.py ./scripts/*.sh 2>/dev/null || true
+    print_status "All scripts in ./scripts directory are now executable"
+else
+    print_warning "Scripts directory not found!"
+fi
+
 # Final status
 print_status "Setup complete! Services should be available at:"
 echo -e "${GREEN}OpenSearch:${NC} http://localhost:9200"
