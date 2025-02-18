@@ -1,23 +1,44 @@
 #!/usr/bin/env python3
-"""
-Customs Data Query Tool using LangChain and Ollama
-Requires Python 3.9+
-"""
-
 import os
 import sys
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 import requests
 from dotenv import load_dotenv
 from opensearchpy import OpenSearch, OpenSearchException
-from langchain.llms import Ollama
-from langchain.agents import create_sql_agent
-from langchain.agents.agent_toolkits import OpenSearchToolkit
-from langchain.tools import OpenSearchQueryRun
+from langchain_ollama import OllamaLLM
+from langchain.agents import AgentType, initialize_agent
+from langchain.tools import Tool
+from langchain.schema import Document
 from pydantic import BaseModel, Field
+
+class OpenSearchElasticSearchRetriever:
+    """Custom implementation of OpenSearch retriever"""
+    def __init__(self, client, index_name: str, k: int = 10):
+        self.client = client
+        self.index_name = index_name
+        self.k = k
+
+    def get_relevant_documents(self, query: str) -> List[Document]:
+        body = {
+            "query": {
+                "multi_match": {
+                    "query": query,
+                    "fields": ["*"]
+                }
+            },
+            "size": self.k
+        }
+        result = self.client.search(index=self.index_name, body=body)
+        hits = result.get("hits", {}).get("hits", [])
+        documents = []
+        for hit in hits:
+            source = hit.get("_source", {})
+            page_content = source.get("content", str(source))
+            documents.append(Document(page_content=page_content))
+        return documents
 
 # Configure logging
 logging.basicConfig(
@@ -37,7 +58,7 @@ class OpenSearchConfig(BaseModel):
 class OllamaConfig(BaseModel):
     """Ollama configuration"""
     base_url: str = Field(default="http://localhost:11434")
-    model: str = Field(default="llama2")
+    model: str = Field(default="tulu3")  # Заменено llama2 на tulu3
     timeout: int = Field(default=120)
 
 class CustomsQueryTool:
@@ -47,14 +68,9 @@ class CustomsQueryTool:
         ollama_config: Optional[Dict[str, Any]] = None
     ):
         """Initialize the Customs Query Tool"""
-        # Load environment variables
         load_dotenv()
-        
-        # Initialize configurations
         self.opensearch_config = OpenSearchConfig(**(opensearch_config or {}))
         self.ollama_config = OllamaConfig(**(ollama_config or {}))
-        
-        # Initialize connections
         self._init_connections()
 
     def _init_connections(self) -> None:
@@ -68,31 +84,39 @@ class CustomsQueryTool:
                 verify_certs=self.opensearch_config.verify_certs,
             )
             
-            # Check OpenSearch connection
             if not self.client.ping():
                 raise ConnectionError("Could not connect to OpenSearch")
             
-            # Initialize Ollama
-            self.llm = Ollama(
+            # Initialize Ollama с новым классом
+            self.llm = OllamaLLM(
                 base_url=self.ollama_config.base_url,
                 model=self.ollama_config.model,
                 timeout=self.ollama_config.timeout
             )
             
-            # Check Ollama connection
             self._check_ollama_connection()
             
-            # Create OpenSearch toolkit
-            self.toolkit = OpenSearchToolkit(
+            # Create OpenSearch retriever с новой реализацией
+            self.retriever = OpenSearchElasticSearchRetriever(
                 client=self.client,
-                index_name=self.opensearch_config.index_name
+                index_name=self.opensearch_config.index_name,
+                k=10
             )
             
-            # Create the agent
-            self.agent = create_sql_agent(
+            # Create search tool
+            search_tool = Tool(
+                name="OpenSearch",
+                func=self._search_documents,
+                description="Searches customs declaration data. Input should be a search query string."
+            )
+            
+            # Заменяем создание агента на initialize_agent
+            self.agent_executor = initialize_agent(
+                tools=[search_tool],
                 llm=self.llm,
-                toolkit=self.toolkit,
-                verbose=True
+                agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+                verbose=True,
+                handle_parsing_errors=True
             )
             
             logger.info("Successfully initialized all connections")
@@ -110,18 +134,20 @@ class CustomsQueryTool:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Could not connect to Ollama: {str(e)}")
 
-    def query_data(self, question: str) -> str:
-        """
-        Query the customs data using natural language
-        
-        Args:
-            question (str): Natural language question about the customs data
-            
-        Returns:
-            str: Response from the agent
-        """
+    def _search_documents(self, query: str) -> str:
+        """Helper function to search documents in OpenSearch"""
         try:
-            return self.agent.run(question)
+            docs = self.retriever.get_relevant_documents(query)
+            return "\n".join(doc.page_content for doc in docs)
+        except Exception as e:
+            return f"Error searching documents: {str(e)}"
+
+    def query_data(self, question: str) -> str:
+        """Query the customs data using natural language"""
+        try:
+            # Используем invoke вместо run
+            result = self.agent_executor.invoke({"input": question})
+            return result["output"]
         except Exception as e:
             logger.error(f"Error querying data: {str(e)}")
             return f"Error processing query: {str(e)}"
@@ -137,6 +163,12 @@ class CustomsQueryTool:
 def main():
     """Main function to run the customs query tool"""
     try:
+        # Проверяем наличие файла с данными
+        data_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/customs_data.csv')
+        if not os.path.exists(data_file):
+            print("Файл с данными не найден. Сначала запустите select_input_files.py")
+            sys.exit(1)
+            
         # Initialize the query tool
         query_tool = CustomsQueryTool()
         
