@@ -46,14 +46,14 @@ def process_file(input_file: str) -> None:
     output_file = os.path.join(data_dir, 'customs_data.csv')
     
     try:
-        # Сначала попробуем прочитать первую строку файла для определения структуры
-        with open(input_file, 'r', encoding='utf-8') as f:
-            first_line = f.readline().strip()
-            if first_line == 'custom_1':  # Пропускаем первую строку, если она содержит 'custom_1'
-                df = pd.read_csv(input_file, delimiter=';', encoding='utf-8', skiprows=1)
-            else:
-                df = pd.read_csv(input_file, delimiter=';', encoding='utf-8')
-
+        # Читаем CSV с учетом специального форматирования
+        df = pd.read_csv(input_file, 
+                        delimiter=';', 
+                        encoding='utf-8',
+                        decimal=',',
+                        thousands=' ',
+                        skiprows=1)
+        
         print(f"Доступные колонки в файле: {df.columns.tolist()}")
         
         # Проверяем, есть ли нужные колонки
@@ -70,17 +70,16 @@ def process_file(input_file: str) -> None:
             'ЄДРПОУ одержувача': 'receiver_code'
         }
         
-        # Проверяем наличие всех необходимых колонок
         missing_columns = [col for col in required_columns.keys() if col not in df.columns]
         if missing_columns:
             raise ValueError(f"Отсутствуют следующие колонки: {', '.join(missing_columns)}")
         
-        # Преобразование в нужный формат
+        # Преобразование в нужный формат с сохранением числовых значений
         processed_df = pd.DataFrame({
             'date': pd.to_datetime(df['Дата оформлення'], format='%d.%m.%y').dt.strftime('%Y-%m-%d'),
             'product': df['Опис товару'],
-            'quantity': pd.to_numeric(df['Кількість'].fillna(0)),
-            'value': pd.to_numeric(df['Фактурна варість, валюта контракту'].fillna(0)),
+            'quantity': df['Кількість'].fillna(0),
+            'value': df['Фактурна варість, валюта контракту'].fillna(0),
             'country': df['Країна походження'],
             'customs': df['Митниця оформлення'],
             'declaration_type': df['Тип декларації'],
