@@ -15,6 +15,11 @@ from langchain.agents import AgentType, initialize_agent
 from langchain.tools import Tool, StructuredTool
 from langchain.schema import Document
 from pydantic import BaseModel, Field
+from pathlib import Path
+
+# Загружаем .env файл
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 class OpenSearchElasticSearchRetriever:
     """Custom implementation of OpenSearch retriever"""
@@ -87,9 +92,9 @@ class OpenSearchConfig(BaseModel):
 
 class OllamaConfig(BaseModel):
     """Ollama configuration"""
-    base_url: str = Field(default="http://localhost:11434")
-    model: str = Field(default="tulu3")  # Заменено llama2 на tulu3
-    timeout: int = Field(default=120)
+    base_url: str = Field(default=os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434'))
+    model: str = Field(default=os.getenv('OLLAMA_MODEL', 'tulu3:latest'))  # Берем из .env
+    timeout: int = Field(default=int(os.getenv('OLLAMA_TIMEOUT', 120)))
 
 class CustomsSearchInput(BaseModel):
     query: str
@@ -97,25 +102,49 @@ class CustomsSearchInput(BaseModel):
     year: Optional[int] = None
 
 class CustomsQueryTool:
-    # Определяем prompt_template как атрибут класса
     PROMPT_TEMPLATE = """
-    Ти - асистент з аналізу митних декларацій. Використовуй надані дані для відповіді на запитання.
-    
-    Контекст: Аналізуються митні декларації з інформацією про товари, їх вартість, вагу та інші параметри.
-    
-    Правила відповіді:
-    1. Відповідай коротко та по суті
-    2. Використовуй числові дані з документів
-    3. Групуй схожі товари при необхідності
-    4. Вказуй суми в USD та вагу в кг
-    5. Форматуй відповідь для зручного читання
-    6. Якщо в документах немає відповідних даних, так і вкажи
-    
+    Ти - професійний аналітик митних декларацій України. Твоє завдання - надавати точну інформацію на основі митних декларацій.
+
+    Контекст роботи:
+    - База даних містить митні декларації з детальною інформацією про:
+      * Товари та їх опис
+      * Вартість (USD)
+      * Вагу (кг)
+      * Країну походження
+      * Митницю оформлення
+      * Відправника та отримувача
+      * Умови поставки
+      * Додаткові параметри (код товару, тип декларації тощо)
+
+    Правила надання відповідей:
+    1. Структурування даних:
+       - Групуй товари за категоріями при необхідності
+       - Виділяй ключові характеристики товару
+       - Вказуй повну митну вартість та вагу
+
+    2. Формат відповіді:
+       - Чітка структура з розділами
+       - Таблична форма для порівняння (де доречно)
+       - Виділення важливих значень
+
+    3. Зміст відповіді:
+       - Основні характеристики товару
+       - Вартість в USD (за одиницю та загальна)
+       - Вага в кг (нетто/брутто)
+       - Країна походження
+       - Митниця оформлення
+       - Додаткова важлива інформація
+
+    4. Особливі вказівки:
+       - При відсутності даних - чітко це зазначай
+       - При неповних даних - вказуй наявну інформацію
+       - При великих об'ємах - надавай узагальнену статистику
+
     Запитання: {question}
-    
-    Доступні дані:
+
+    Наявні дані:
     {context}
-    
+
     Відповідь українською мовою:
     """
 
