@@ -91,6 +91,11 @@ class OllamaConfig(BaseModel):
     model: str = Field(default="tulu3")  # Заменено llama2 на tulu3
     timeout: int = Field(default=120)
 
+class CustomsSearchInput(BaseModel):
+    query: str
+    mitnica: Optional[str] = None
+    year: Optional[int] = None
+
 class CustomsQueryTool:
     # Определяем prompt_template как атрибут класса
     PROMPT_TEMPLATE = """
@@ -155,10 +160,11 @@ class CustomsQueryTool:
             )
             
             # Create structured search tool
-            self.search_tool = StructuredTool.from_function(
-                func=self.search_customs,
+            self.search_tool = StructuredTool(
                 name="CustomsSearch",
-                description="Пошук у митних деклараціях. Використовуй для пошуку інформації про товари, митниці, вартість та інші параметри.",
+                description="Search customs declarations",
+                func=self.search_customs,
+                args_schema=CustomsSearchInput
             )
             
             # Initialize agent with structured tool
@@ -188,22 +194,38 @@ class CustomsQueryTool:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Could not connect to Ollama: {str(e)}")
 
-    def search_customs(self, query: str) -> str:
+    def search_customs(self, input: CustomsSearchInput) -> str:
         """
         Поиск в таможенных декларациях
         Args:
-            query: Поисковый запрос
+            input: Структурированный запрос
         Returns:
             str: Результат поиска
         """
         try:
-            docs = self.retriever.get_relevant_documents(query)
-            if not docs:
-                return "Не знайдено відповідних даних."
-            return "\n---\n".join([doc.page_content for doc in docs])
+            query = {
+                "bool": {
+                    "must": [
+                        {"match": {"product_description": input.query}}
+                    ]
+                }
+            }
+            
+            if input.mitnica:
+                query["bool"]["must"].append(
+                    {"match": {"customs_office": input.mitnica}}
+                )
+                
+            if input.year:
+                query["bool"]["must"].append(
+                    {"match": {"processing_date": str(input.year)}}
+                )
+                
+            return self._search_documents(query)
+            
         except Exception as e:
             logger.error(f"Error searching customs data: {e}")
-            return f"Помилка пошуку: {str(e)}"
+            return f"Error: {str(e)}"
 
     def _search_documents(self, query: str) -> str:
         """Helper function to search documents in OpenSearch"""
