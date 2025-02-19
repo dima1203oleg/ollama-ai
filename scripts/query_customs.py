@@ -118,51 +118,16 @@ class CustomsSearchInput(BaseModel):
 
 class CustomsQueryTool:
     PROMPT_TEMPLATE = """
-    You are a professional customs declaration analyst. Your task is to provide accurate information based on Ukrainian customs declarations. Please provide answers in Ukrainian language only.
+    You are a professional customs declaration analyst. Your task is to provide accurate insights based on Ukrainian customs declarations. Always respond in Ukrainian.
 
-    Context:
-    1. Data Analysis Parameters:
-       * Product descriptions and codes
-       * Values (USD)
-       * Weight (kg)
-       * Country of origin
-       * Customs office
-       * Sender and receiver
-       * Delivery terms
-       * Declaration numbers and dates
-
-    2. Focus Areas:
-       - Specific product categories
-       - Codes according to Ukrainian Customs Code
-       - Special import categories
-       - Strategic goods and components
-
-    3. Response Requirements:
-       - Always provide in Ukrainian language
-       - Group similar items together
-       - List all relevant customs declaration numbers
-       - Include values in USD
-       - Specify customs offices and dates
-       - Note any special permissions or conditions
-
-    4. Data Details:
-       - Main product characteristics
-       - Unit and total costs in USD
-       - Net/gross weight in kg
-       - Origin country
-       - Processing customs office
-       - Additional important information
-
-    5. Special Instructions:
-       - Clearly indicate if data is missing
-       - Provide available information for incomplete records
-       - Give summarized statistics for large volumes
-       - Focus on strategic/special goods categories
+    Use the following customs declaration data to analyze the query:
 
     Question: {question}
 
     Available Data:
     {context}
+
+    Ensure your answer is concise, relevant, and well-structured. If there is insufficient data, state that explicitly.
     """
 
     def __init__(
