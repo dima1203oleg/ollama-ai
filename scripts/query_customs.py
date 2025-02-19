@@ -28,52 +28,67 @@ class OpenSearchElasticSearchRetriever:
         self.index_name = index_name
         self.k = k
 
-    def get_relevant_documents(self, query: str) -> List[Document]:
-        body = {
-            "query": {
+    def get_relevant_documents(self, question: str) -> List[Document]:
+        """Get relevant documents based on query"""
+        try:
+            # Add filters for strategic goods
+            strategic_codes = [
+                '8526920090',  # Radio control equipment
+                '8807300090',  # UAV components
+                '8501320090',  # Electric motors
+                '8525890010',  # Transmitting equipment
+                '8517620000'   # Communication equipment
+            ]
+            
+            # Build query with filters
+            query = {
                 "bool": {
                     "should": [
-                        {"multi_match": {
-                            "query": query,
-                            "fields": ["product_description^3", "customs_office^2", "*"],
-                            "type": "best_fields",
-                            "fuzziness": "AUTO"
+                        {"terms": {"product_code": strategic_codes}},
+                        {"match_phrase": {
+                            "product_description": {
+                                "query": "безпілотн"
+                            }
                         }},
                         {"match_phrase": {
                             "product_description": {
-                                "query": query,
-                                "boost": 2
+                                "query": "дрон"
                             }
                         }}
-                    ]
+                    ],
+                    "minimum_should_match": 1
                 }
-            },
-            "size": self.k,
-            "sort": [{"_score": "desc"}]
-        }
-        
-        result = self.client.search(index=self.index_name, body=body)
-        hits = result.get("hits", {}).get("hits", [])
-        documents = []
-        
-        for hit in hits:
-            source = hit.get("_source", {})
-            metadata = {
-                "score": hit.get("_score", 0),
-                "id": hit.get("_id", ""),
             }
-            # Форматируем данные для лучшей читаемости
-            content = (
-                f"Декларация №{source.get('declaration_number', 'N/A')}\n"
-                f"Товар: {source.get('product_description', 'N/A')}\n"
-                f"Таможня: {source.get('customs_office', 'N/A')}\n"
-                f"Стоимость: {source.get('invoice_value', 0)} USD\n"
-                f"Вес нетто: {source.get('net_weight', 0)} кг\n"
-                f"Дата: {source.get('processing_date', 'N/A')}\n"
+            
+            response = self.client.search(
+                index=self.index_name,
+                body={"query": query},
+                size=20
             )
-            documents.append(Document(page_content=content, metadata=metadata))
-        
-        return documents
+            
+            # Process results
+            documents = []
+            for hit in response["hits"]["hits"]:
+                source = hit.get("_source", {})
+                metadata = {
+                    "score": hit.get("_score", 0),
+                    "id": hit.get("_id", ""),
+                }
+                # Форматируем данные для лучшей читаемости
+                content = (
+                    f"Декларация №{source.get('declaration_number', 'N/A')}\n"
+                    f"Товар: {source.get('product_description', 'N/A')}\n"
+                    f"Таможня: {source.get('customs_office', 'N/A')}\n"
+                    f"Стоимость: {source.get('invoice_value', 0)} USD\n"
+                    f"Вес нетто: {source.get('net_weight', 0)} кг\n"
+                    f"Дата: {source.get('processing_date', 'N/A')}\n"
+                )
+                documents.append(Document(page_content=content, metadata=metadata))
+            
+            return documents
+        except Exception as e:
+            logger.error(f"Error retrieving documents: {e}")
+            return []
 
 # Configure logging
 logging.basicConfig(
@@ -103,49 +118,51 @@ class CustomsSearchInput(BaseModel):
 
 class CustomsQueryTool:
     PROMPT_TEMPLATE = """
-    Ти - професійний аналітик митних декларацій України. Твоє завдання - надавати точну інформацію на основі митних декларацій.
+    You are a professional customs declaration analyst. Your task is to provide accurate information based on Ukrainian customs declarations. Please provide answers in Ukrainian language only.
 
-    Контекст роботи:
-    - База даних містить митні декларації з детальною інформацією про:
-      * Товари та їх опис
-      * Вартість (USD)
-      * Вагу (кг)
-      * Країну походження
-      * Митницю оформлення
-      * Відправника та отримувача
-      * Умови поставки
-      * Додаткові параметри (код товару, тип декларації тощо)
+    Context:
+    1. Data Analysis Parameters:
+       * Product descriptions and codes
+       * Values (USD)
+       * Weight (kg)
+       * Country of origin
+       * Customs office
+       * Sender and receiver
+       * Delivery terms
+       * Declaration numbers and dates
 
-    Правила надання відповідей:
-    1. Структурування даних:
-       - Групуй товари за категоріями при необхідності
-       - Виділяй ключові характеристики товару
-       - Вказуй повну митну вартість та вагу
+    2. Focus Areas:
+       - Specific product categories
+       - Codes according to Ukrainian Customs Code
+       - Special import categories
+       - Strategic goods and components
 
-    2. Формат відповіді:
-       - Чітка структура з розділами
-       - Таблична форма для порівняння (де доречно)
-       - Виділення важливих значень
+    3. Response Requirements:
+       - Always provide in Ukrainian language
+       - Group similar items together
+       - List all relevant customs declaration numbers
+       - Include values in USD
+       - Specify customs offices and dates
+       - Note any special permissions or conditions
 
-    3. Зміст відповіді:
-       - Основні характеристики товару
-       - Вартість в USD (за одиницю та загальна)
-       - Вага в кг (нетто/брутто)
-       - Країна походження
-       - Митниця оформлення
-       - Додаткова важлива інформація
+    4. Data Details:
+       - Main product characteristics
+       - Unit and total costs in USD
+       - Net/gross weight in kg
+       - Origin country
+       - Processing customs office
+       - Additional important information
 
-    4. Особливі вказівки:
-       - При відсутності даних - чітко це зазначай
-       - При неповних даних - вказуй наявну інформацію
-       - При великих об'ємах - надавай узагальнену статистику
+    5. Special Instructions:
+       - Clearly indicate if data is missing
+       - Provide available information for incomplete records
+       - Give summarized statistics for large volumes
+       - Focus on strategic/special goods categories
 
-    Запитання: {question}
+    Question: {question}
 
-    Наявні дані:
+    Available Data:
     {context}
-
-    Відповідь українською мовою:
     """
 
     def __init__(
