@@ -12,7 +12,7 @@ from opensearchpy import OpenSearch, OpenSearchException
 from opensearchpy.helpers import bulk
 from langchain_ollama import OllamaLLM
 from langchain.agents import AgentType, initialize_agent
-from langchain.tools import Tool
+from langchain.tools import Tool, StructuredTool
 from langchain.schema import Document
 from pydantic import BaseModel, Field
 
@@ -26,20 +26,48 @@ class OpenSearchElasticSearchRetriever:
     def get_relevant_documents(self, query: str) -> List[Document]:
         body = {
             "query": {
-                "multi_match": {
-                    "query": query,
-                    "fields": ["*"]
+                "bool": {
+                    "should": [
+                        {"multi_match": {
+                            "query": query,
+                            "fields": ["product_description^3", "customs_office^2", "*"],
+                            "type": "best_fields",
+                            "fuzziness": "AUTO"
+                        }},
+                        {"match_phrase": {
+                            "product_description": {
+                                "query": query,
+                                "boost": 2
+                            }
+                        }}
+                    ]
                 }
             },
-            "size": self.k
+            "size": self.k,
+            "sort": [{"_score": "desc"}]
         }
+        
         result = self.client.search(index=self.index_name, body=body)
         hits = result.get("hits", {}).get("hits", [])
         documents = []
+        
         for hit in hits:
             source = hit.get("_source", {})
-            page_content = source.get("content", str(source))
-            documents.append(Document(page_content=page_content))
+            metadata = {
+                "score": hit.get("_score", 0),
+                "id": hit.get("_id", ""),
+            }
+            # Форматируем данные для лучшей читаемости
+            content = (
+                f"Декларация №{source.get('declaration_number', 'N/A')}\n"
+                f"Товар: {source.get('product_description', 'N/A')}\n"
+                f"Таможня: {source.get('customs_office', 'N/A')}\n"
+                f"Стоимость: {source.get('invoice_value', 0)} USD\n"
+                f"Вес нетто: {source.get('net_weight', 0)} кг\n"
+                f"Дата: {source.get('processing_date', 'N/A')}\n"
+            )
+            documents.append(Document(page_content=content, metadata=metadata))
+        
         return documents
 
 # Configure logging
@@ -64,6 +92,28 @@ class OllamaConfig(BaseModel):
     timeout: int = Field(default=120)
 
 class CustomsQueryTool:
+    # Определяем prompt_template как атрибут класса
+    PROMPT_TEMPLATE = """
+    Ти - асистент з аналізу митних декларацій. Використовуй надані дані для відповіді на запитання.
+    
+    Контекст: Аналізуються митні декларації з інформацією про товари, їх вартість, вагу та інші параметри.
+    
+    Правила відповіді:
+    1. Відповідай коротко та по суті
+    2. Використовуй числові дані з документів
+    3. Групуй схожі товари при необхідності
+    4. Вказуй суми в USD та вагу в кг
+    5. Форматуй відповідь для зручного читання
+    6. Якщо в документах немає відповідних даних, так і вкажи
+    
+    Запитання: {question}
+    
+    Доступні дані:
+    {context}
+    
+    Відповідь українською мовою:
+    """
+
     def __init__(
         self,
         opensearch_config: Optional[Dict[str, Any]] = None,
@@ -73,12 +123,13 @@ class CustomsQueryTool:
         load_dotenv()
         self.opensearch_config = OpenSearchConfig(**(opensearch_config or {}))
         self.ollama_config = OllamaConfig(**(ollama_config or {}))
+        self.prompt_template = self.PROMPT_TEMPLATE
         self._init_connections()
 
     def _init_connections(self) -> None:
         """Initialize connections to OpenSearch and Ollama"""
         try:
-            # Initialize OpenSearch client
+            # Initialize OpenSearch client and retriever
             self.client = OpenSearch(
                 hosts=self.opensearch_config.hosts,
                 http_compress=self.opensearch_config.http_compress,
@@ -89,7 +140,6 @@ class CustomsQueryTool:
             if not self.client.ping():
                 raise ConnectionError("Could not connect to OpenSearch")
             
-            # Initialize Ollama с новым классом
             self.llm = OllamaLLM(
                 base_url=self.ollama_config.base_url,
                 model=self.ollama_config.model,
@@ -98,27 +148,29 @@ class CustomsQueryTool:
             
             self._check_ollama_connection()
             
-            # Create OpenSearch retriever с новой реализацией
             self.retriever = OpenSearchElasticSearchRetriever(
                 client=self.client,
                 index_name=self.opensearch_config.index_name,
                 k=10
             )
             
-            # Create search tool
-            search_tool = Tool(
-                name="OpenSearch",
-                func=self._search_documents,
-                description="Searches customs declaration data. Input should be a search query string."
+            # Create structured search tool
+            self.search_tool = StructuredTool.from_function(
+                func=self.search_customs,
+                name="CustomsSearch",
+                description="Пошук у митних деклараціях. Використовуй для пошуку інформації про товари, митниці, вартість та інші параметри.",
             )
             
-            # Заменяем создание агента на initialize_agent
+            # Initialize agent with structured tool
             self.agent_executor = initialize_agent(
-                tools=[search_tool],
+                tools=[self.search_tool],
                 llm=self.llm,
                 agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
                 verbose=True,
-                handle_parsing_errors=True
+                handle_parsing_errors=True,
+                agent_kwargs={
+                    "system_message": "Ти - асистент з аналізу митних декларацій. Відповідай українською мовою."
+                }
             )
             
             logger.info("Successfully initialized all connections")
@@ -136,6 +188,23 @@ class CustomsQueryTool:
         except requests.exceptions.RequestException as e:
             raise ConnectionError(f"Could not connect to Ollama: {str(e)}")
 
+    def search_customs(self, query: str) -> str:
+        """
+        Поиск в таможенных декларациях
+        Args:
+            query: Поисковый запрос
+        Returns:
+            str: Результат поиска
+        """
+        try:
+            docs = self.retriever.get_relevant_documents(query)
+            if not docs:
+                return "Не знайдено відповідних даних."
+            return "\n---\n".join([doc.page_content for doc in docs])
+        except Exception as e:
+            logger.error(f"Error searching customs data: {e}")
+            return f"Помилка пошуку: {str(e)}"
+
     def _search_documents(self, query: str) -> str:
         """Helper function to search documents in OpenSearch"""
         try:
@@ -147,12 +216,30 @@ class CustomsQueryTool:
     def query_data(self, question: str) -> str:
         """Query the customs data using natural language"""
         try:
-            # Используем invoke вместо run
-            result = self.agent_executor.invoke({"input": question})
-            return result["output"]
+            # Получаем документы и формируем контекст
+            docs = self.retriever.get_relevant_documents(question)
+            if not docs:
+                return "Не знайдено відповідних даних за вашим запитом."
+            
+            context = "\n---\n".join([doc.page_content for doc in docs])
+            
+            # Форматируем промпт
+            formatted_prompt = self.prompt_template.format(
+                question=question,
+                context=context
+            )
+            
+            # Выполняем запрос
+            result = self.agent_executor.invoke({
+                "input": formatted_prompt,
+                "context": context  # Добавляем контекст явно
+            })
+            
+            return result.get("output", "Не вдалося згенерувати відповідь.")
+            
         except Exception as e:
             logger.error(f"Error querying data: {str(e)}")
-            return f"Error processing query: {str(e)}"
+            return f"Помилка обробки запиту: {str(e)}"
 
     def get_index_stats(self) -> Dict[str, Any]:
         """Get statistics about the customs declarations index"""
@@ -233,17 +320,13 @@ def main():
         query_tool.setup_index()
         logger.info("Проверка индекса завершена")
         
-        # Example questions
-        example_questions = [
-            "Чи розмитнювалась на волині автомобіль АУДІ",
-            "Покажи топ 5 країн за вартістю товарів",
-            "Яка загальна вага всіх товарів?",
-            "Які найпопулярніші умови поставки?"
-        ]
-        
-        # Process each question
-        for question in example_questions:
-            print(f"\nВопрос: {question}")
+        while True:
+            # Интерактивный ввод вопроса
+            question = input("\nВведите ваш вопрос (или 'exit' для выхода): ")
+            
+            if question.lower() == 'exit':
+                break
+                
             print("=" * 50)
             response = query_tool.query_data(question)
             print(f"Ответ: {response}\n")
