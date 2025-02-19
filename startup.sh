@@ -19,6 +19,53 @@ print_error() {
     echo -e "${RED}[x] $1${NC}"
 }
 
+# Enhanced Docker check with multiple socket paths and diagnostics
+print_status "Checking Docker status..."
+docker_socket_paths=(
+    "/var/run/docker.sock"
+    "/Users/olegkizima/.docker/run/docker.sock"
+    "/Users/olegkizima/Library/Containers/com.docker.docker/Data/docker.sock"
+)
+
+docker_running=false
+for socket in "${docker_socket_paths[@]}"; do
+    if [ -S "$socket" ]; then
+        print_status "Found Docker socket at: $socket"
+        if DOCKER_HOST="unix://$socket" docker info >/dev/null 2>&1; then
+            docker_running=true
+            export DOCKER_HOST="unix://$socket"
+            break
+        fi
+    fi
+done
+
+if ! $docker_running; then
+    print_error "Docker is not running or accessible!"
+    echo -e "${YELLOW}Diagnostic information:${NC}"
+    echo -e "1. Docker Desktop status:"
+    pgrep -fl Docker || echo "Docker Desktop process not found"
+    echo -e "\n2. Docker socket status:"
+    for socket in "${docker_socket_paths[@]}"; do
+        echo -n "$socket: "
+        if [ -S "$socket" ]; then
+            echo "exists"
+            ls -l "$socket"
+        else
+            echo "not found"
+        fi
+    done
+    echo -e "\n3. Docker client version:"
+    docker version --format '{{.Client.Version}}' 2>/dev/null || echo "Cannot get Docker version"
+    
+    echo -e "\n${YELLOW}Please ensure Docker is running by following these steps:${NC}"
+    echo -e "1. Open Docker Desktop application"
+    echo -e "2. Wait for Docker engine to start completely"
+    echo -e "3. Look for the green 'Running' status in Docker Desktop"
+    echo -e "4. Try running: killall Docker && open -a Docker"
+    echo -e "5. Run this script again once Docker is running"
+    exit 1
+fi
+
 # Check if Python 3.11 is installed
 if ! command -v python3.11 &> /dev/null; then
     print_error "Python 3.11 is not installed!"
@@ -41,13 +88,25 @@ else
     print_warning "Virtual environment already activated"
 fi
 
-# Update pip
-print_status "Updating pip..."
-pip install --upgrade pip
+# Update pip and install base packages
+print_status "Updating pip and installing base packages..."
+pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install dependencies
+# Install dependencies with improved reliability
 print_status "Installing dependencies..."
-pip install -r requirements.txt
+pip install --no-cache-dir --upgrade pip setuptools wheel
+pip install --no-cache-dir -r requirements.txt || {
+    print_warning "First attempt failed, trying alternative installation method..."
+    pip install --no-cache-dir --no-deps -r requirements.txt && \
+    pip install --no-cache-dir -r requirements.txt
+}
+
+# Explicitly install potentially missing packages
+print_status "Installing additional required packages..."
+pip install --no-cache-dir urllib3 langchain-core
+
+# Add a quick pause to ensure all installations complete
+sleep 2
 
 # Verify Python dependencies
 print_status "Verifying Python dependencies..."
@@ -64,18 +123,29 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 
-# Check if ports are available
+# Улучшенная функция проверки порта
 check_port() {
-    if lsof -i :$1 >/dev/null; then
-        print_error "Port $1 is already in use!"
-        exit 1
+    local port=$1
+    if lsof -i :$port >/dev/null 2>&1; then
+        print_error "Port $port is already in use!"
+        print_warning "Attempting to identify process..."
+        lsof -i :$port
+        return 1
     fi
 }
 
 print_status "Checking if required ports are available..."
-check_port 9200 # OpenSearch
-check_port 5601 # OpenSearch Dashboards
-check_port 5044 # Logstash
+ports_ok=true
+for port in 9200 5601 5044 9600; do  # Removed 11434
+    if ! check_port $port; then
+        ports_ok=false
+    fi
+done
+
+if [ "$ports_ok" = false ]; then
+    print_error "Some ports are in use. Please run ./unstartup.sh first"
+    exit 1
+fi
 
 # Start containers
 print_status "Starting Docker containers..."

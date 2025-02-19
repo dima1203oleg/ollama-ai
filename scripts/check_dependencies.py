@@ -5,7 +5,7 @@ Save as scripts/check_dependencies.py
 """
 
 import sys
-import pkg_resources
+from importlib.metadata import version, distributions
 import platform
 import requests
 from rich.console import Console
@@ -14,24 +14,46 @@ from rich.table import Table
 console = Console()
 
 def check_python_version():
-    version = sys.version_info
-    return version.major == 3 and version.minor >= 9
+    version_info = sys.version_info
+    return version_info.major == 3 and version_info.minor >= 9
 
 def check_packages():
     required = {}
-    for req in pkg_resources.parse_requirements(open('requirements.txt')):
-        required[req.key] = str(req.specifier).replace('==', '')
+    with open('requirements.txt') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+                
+            # Нормализация имени пакета
+            if '>=' in line:
+                package = line.split('>=')[0].strip().replace('-', '_').lower()
+                version = line.split('>=')[1].split(',')[0].strip()
+                required[package] = {'version': version, 'operator': '>='}
+            elif '==' in line:
+                package = line.split('==')[0].strip().replace('-', '_').lower()
+                version = line.split('==')[1].strip()
+                required[package] = {'version': version, 'operator': '=='}
+            elif '<' in line:
+                package = line.split('<')[0].strip().replace('-', '_').lower()
+                version = line.split('<')[1].strip()
+                required[package] = {'version': version, 'operator': '<'}
+
+    # Получаем установленные пакеты с нормализованными именами
+    installed = {dist.metadata['Name'].lower().replace('-', '_'): dist.version 
+                for dist in distributions()}
     
-    installed = {pkg.key: pkg.version for pkg in pkg_resources.working_set}
+    print("Debug: Required packages:", required)
+    print("Debug: Installed packages:", installed)
     
     missing = []
     outdated = []
     
-    for package, version in required.items():
+    for package, req in required.items():
         if package not in installed:
-            missing.append(f"{package}=={version}")
-        elif installed[package] != version:
-            outdated.append(f"{package} (installed: {installed[package]}, required: {version})")
+            missing.append(f"{package}=={req['version']}")
+        elif req['operator'] == '==' and installed[package] != req['version']:
+            outdated.append(f"{package} (installed: {installed[package]}, required: {req['version']})")
     
     return missing, outdated
 
@@ -65,10 +87,18 @@ def main():
 
     # Check packages
     missing, outdated = check_packages()
+    
+    # Separate rows for missing and outdated packages
     table.add_row(
-        "Python Packages",
-        "✓" if not (missing or outdated) else "✗",
-        f"Missing: {', '.join(missing) if missing else 'None'}\nOutdated: {', '.join(outdated) if outdated else 'None'}"
+        "Missing Packages",
+        "✓" if not missing else "✗",
+        f"{', '.join(missing) if missing else 'None'}"
+    )
+    
+    table.add_row(
+        "Outdated Packages",
+        "✓" if not outdated else "✗",
+        f"{', '.join(outdated) if outdated else 'None'}"
     )
 
     # Check Ollama
