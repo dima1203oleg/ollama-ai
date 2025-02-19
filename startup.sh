@@ -19,6 +19,42 @@ print_error() {
     echo -e "${RED}[x] $1${NC}"
 }
 
+# Функция для принудительного освобождения порта
+kill_port() {
+    local port=$1
+    if lsof -i :$port >/dev/null 2>&1; then
+        print_warning "Found process on port $port:"
+        lsof -i :$port
+        print_warning "Attempting to kill process on port $port..."
+        lsof -ti :$port | xargs kill -9
+        if [ $? -eq 0 ]; then
+            print_status "Successfully killed process on port $port"
+            sleep 1  # Даем системе время на освобождение порта
+            return 0
+        else
+            print_error "Failed to kill process on port $port"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Проверка наличия Homebrew
+if ! command -v brew >/dev/null 2>&1; then
+    print_error "Homebrew не установлен. Установите Homebrew с https://brew.sh"
+    exit 1
+fi
+
+# Проверка наличия coreutils
+if ! command -v gtimeout >/dev/null 2>&1; then
+    print_status "Установка coreutils..."
+    brew install coreutils || {
+        print_error "Не удалось установить coreutils"
+        exit 1
+    }
+    print_status "coreutils успешно установлен"
+fi
+
 # Enhanced Docker check with multiple socket paths and diagnostics
 print_status "Checking Docker status..."
 docker_socket_paths=(
@@ -66,47 +102,108 @@ if ! $docker_running; then
     exit 1
 fi
 
-# Check if Python 3.11 is installed
+# Check for Python 3.11
+print_status "Checking Python 3.11..."
 if ! command -v python3.11 &> /dev/null; then
-    print_error "Python 3.11 is not installed!"
+    print_error "Python 3.11 not found!"
+    print_status "Installing Python 3.11..."
+    brew install python@3.11 || {
+        print_error "Failed to install Python 3.11"
+        exit 1
+    }
+fi
+
+# Verify Python version (macOS compatible version)
+PYTHON_VERSION=$(python3.11 -V 2>&1 | awk '{print $2}')
+if [[ ! "$PYTHON_VERSION" =~ ^3\.11\. ]]; then
+    print_error "Failed to verify Python 3.11 version (found: $PYTHON_VERSION)"
+    exit 1
+else
+    print_status "Found Python $PYTHON_VERSION"
+fi
+
+# Setup virtual environment
+print_status "Setting up Python virtual environment..."
+if [ -d "venv" ]; then
+    print_warning "Found existing virtual environment"
+    if [ "$VIRTUAL_ENV" != "" ]; then
+        print_status "Deactivating current virtual environment..."
+        deactivate
+    fi
+    print_status "Removing old virtual environment..."
+    rm -rf venv
+fi
+
+print_status "Creating new virtual environment with Python 3.11..."
+python3.11 -m venv venv || {
+    print_error "Failed to create virtual environment"
+    exit 1
+}
+
+print_status "Activating virtual environment..."
+source venv/bin/activate || {
+    print_error "Failed to activate virtual environment"
+    exit 1
+}
+
+# Verify virtual environment
+if [[ "$VIRTUAL_ENV" != *"venv"* ]]; then
+    print_error "Virtual environment activation failed"
     exit 1
 fi
 
-# Check if virtual environment exists
-if [ ! -d "venv" ]; then
-    print_status "Creating virtual environment..."
-    python3.11 -m venv venv
-else
-    print_warning "Virtual environment already exists, skipping creation"
+if [[ $(python -V) != *"3.11"* ]]; then
+    print_error "Wrong Python version in virtual environment"
+    exit 1
 fi
 
-# Check if virtual environment is activated
-if [[ "$VIRTUAL_ENV" != *"venv"* ]]; then
-    print_status "Activating virtual environment..."
-    source venv/bin/activate
-else
-    print_warning "Virtual environment already activated"
-fi
+print_status "Virtual environment ready with Python $(python -V)"
 
-# Update pip and install base packages
-print_status "Updating pip and installing base packages..."
-pip install --no-cache-dir --upgrade pip setuptools wheel
+# Install dependencies
+print_status "Updating pip and installing dependencies..."
+python -m pip install --upgrade pip setuptools wheel
 
 # Install dependencies with improved reliability
 print_status "Installing dependencies..."
 pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install essential packages first
+print_status "Installing essential packages..."
+pip install --no-cache-dir pandas urllib3 langchain-core || {
+    print_error "Failed to install essential packages"
+    exit 1
+}
+
+# Install remaining dependencies
 pip install --no-cache-dir -r requirements.txt || {
     print_warning "First attempt failed, trying alternative installation method..."
     pip install --no-cache-dir --no-deps -r requirements.txt && \
     pip install --no-cache-dir -r requirements.txt
 }
 
-# Explicitly install potentially missing packages
-print_status "Installing additional required packages..."
-pip install --no-cache-dir urllib3 langchain-core
+# Create activation helper script
+print_status "Creating venv activation helper..."
+cat > ./scripts/activate_venv.sh << 'EOL'
+#!/bin/bash
+if [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+else
+    echo "Virtual environment not found!"
+    exit 1
+fi
+EOL
+chmod +x ./scripts/activate_venv.sh
 
-# Add a quick pause to ensure all installations complete
-sleep 2
+# Add venv activation to .bashrc and .zshrc
+print_status "Adding venv activation to shell configs..."
+for rc in ".bashrc" ".zshrc"; do
+    if [ -f "$HOME/$rc" ]; then
+        if ! grep -q "source ./venv/bin/activate" "$HOME/$rc"; then
+            echo "# Auto-activate venv for ollama-ai project" >> "$HOME/$rc"
+            echo "if [ -d \"$PWD/venv\" ]; then source $PWD/venv/bin/activate; fi" >> "$HOME/$rc"
+        fi
+    fi
+done
 
 # Verify Python dependencies
 print_status "Verifying Python dependencies..."
@@ -134,16 +231,21 @@ check_port() {
     fi
 }
 
+# Port checking and cleanup section
 print_status "Checking if required ports are available..."
 ports_ok=true
-for port in 9200 5601 5044 9600; do  # Removed 11434
+for port in 9200 5601 5044 9600; do
     if ! check_port $port; then
-        ports_ok=false
+        print_warning "Attempting to free port $port..."
+        if ! kill_port $port; then
+            print_error "Could not free port $port"
+            ports_ok=false
+        fi
     fi
 done
 
 if [ "$ports_ok" = false ]; then
-    print_error "Some ports are in use. Please run ./unstartup.sh first"
+    print_error "Could not free all required ports. Please check running processes manually"
     exit 1
 fi
 
@@ -171,14 +273,47 @@ fi
 print_status "Waiting for services to start (30 seconds)..."
 sleep 30
 
-# Run dependency check script
+# Make sure venv is activated before running scripts
+ensure_venv() {
+    if [[ "$VIRTUAL_ENV" != *"venv"* ]]; then
+        print_warning "Virtual environment not activated, activating now..."
+        source venv/bin/activate || {
+            print_error "Failed to activate virtual environment"
+            exit 1
+        }
+    fi
+}
+
+# Before running any Python scripts
+ensure_venv
+
+# Run dependency check script with timeout and capture output
 print_status "Running final dependency check..."
 if [ -f "./scripts/check_dependencies.py" ]; then
     chmod +x ./scripts/check_dependencies.py
-    ./scripts/check_dependencies.py
+    
+    # Activate virtual environment for the check if not already activated
+    if [[ "$VIRTUAL_ENV" != *"venv"* ]]; then
+        source venv/bin/activate
+    fi
+    
+    # Run with increased timeout and ensure proper Python path
+    PYTHONPATH="$(pwd)" gtimeout 60 python ./scripts/check_dependencies.py
+    check_result=$?
+    
+    case $check_result in
+        0)
+            print_status "Dependency check completed successfully"
+            ;;
+        124)
+            print_warning "Dependency check timed out (60s)"
+            ;;
+        *)
+            print_warning "Dependency check failed with code $check_result"
+            ;;
+    esac
 else
-    print_error "check_dependencies.py script not found!"
-    exit 1
+    print_warning "check_dependencies.py script not found!"
 fi
 
 # Make all scripts in scripts directory executable
@@ -196,6 +331,11 @@ echo -e "${GREEN}OpenSearch:${NC} http://localhost:9200"
 echo -e "${GREEN}OpenSearch Dashboards:${NC} http://localhost:5601"
 echo -e "${GREEN}Logstash:${NC} http://localhost:5044"
 echo -e "${GREEN}Ollama:${NC} http://localhost:11434"
+
+print_status "Important notes:"
+echo -e "1. To activate the virtual environment manually, run: ${YELLOW}source venv/bin/activate${NC}"
+echo -e "2. The environment will auto-activate in new terminal sessions"
+echo -e "3. If you get 'command not found' errors, run: ${YELLOW}source venv/bin/activate${NC}"
 
 # Check if query_customs.py exists and is executable
 if [ -f "./scripts/query_customs.py" ]; then
