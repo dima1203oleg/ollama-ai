@@ -6,8 +6,10 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 import requests
+import pandas as pd
 from dotenv import load_dotenv
 from opensearchpy import OpenSearch, OpenSearchException
+from opensearchpy.helpers import bulk
 from langchain_ollama import OllamaLLM
 from langchain.agents import AgentType, initialize_agent
 from langchain.tools import Tool
@@ -160,36 +162,94 @@ class CustomsQueryTool:
             logger.error(f"Error getting index stats: {str(e)}")
             return {}
 
+    def setup_index(self) -> None:
+        """Проверка существования индекса"""
+        try:
+            if not self.client.indices.exists(index=self.opensearch_config.index_name):
+                logger.error(f"Индекс {self.opensearch_config.index_name} не существует.")
+                logger.error("Пожалуйста, сначала запустите select_input_files.py для создания и наполнения индекса.")
+                sys.exit(1)
+            
+            # Проверяем маппинг
+            mapping = self.client.indices.get_mapping(index=self.opensearch_config.index_name)
+            if not mapping:
+                logger.error("Маппинг индекса отсутствует")
+                sys.exit(1)
+                
+            # Получаем статистику индекса
+            stats = self.client.indices.stats(index=self.opensearch_config.index_name)
+            doc_count = stats['indices'][self.opensearch_config.index_name]['total']['docs']['count']
+            logger.info(f"Найдено {doc_count} документов в индексе {self.opensearch_config.index_name}")
+            
+        except Exception as e:
+            logger.error(f"Ошибка при проверке индекса: {str(e)}")
+            raise
+
+column_mapping = {
+    'date': 'processing_date',
+    'product': 'product_description', 
+    'quantity': 'quantity',
+    'value': 'invoice_value',
+    'country': 'origin_country',
+    'customs': 'customs_office',
+    'declaration_type': 'declaration_type',
+    'sender': 'sender',
+    'receiver': 'recipient',
+    'receiver_code': 'recipient_code',
+    'declaration_number': 'declaration_number',
+    'trading_country': 'trading_country',
+    'sending_country': 'shipping_country',
+    'delivery_terms': 'delivery_terms', 
+    'delivery_place': 'delivery_location',
+    'unit': 'unit',
+    'weight_gross': 'gross_weight',
+    'weight_net': 'net_weight',
+    'customs_weight': 'customs_weight',
+    'special_mark': 'special_mark',
+    'contract': 'contract_type',
+    'trademark': 'trade_mark',
+    'product_code': 'product_code',
+    'calculated_invoice_value_usd_kg': 'calculated_invoice_value_usd_kg',
+    'weight_unit': 'unit_weight',
+    'weight_diff': 'weight_difference',
+    'calculated_customs_value_net_usd_kg': 'calculated_customs_value_net_usd_kg',
+    'calculated_customs_value_usd_add': 'calculated_customs_value_usd_add_unit',
+    'calculated_customs_value_gross_usd_kg': 'calculated_customs_value_gross_usd_kg',
+    'min_base_usd_kg': 'min_base_usd_kg',
+    'min_base_diff': 'min_base_difference',
+    'cz_net_usd_kg': 'customs_value_net_usd_kg',
+    'cz_diff_usd_kg': 'customs_value_difference_usd_kg',
+    'preferential': 'preferential_rate',
+    'full': 'full_rate'
+}
+
 def main():
     """Main function to run the customs query tool"""
     try:
-        # Проверяем наличие файла с данными
-        data_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data/customs_data.csv')
-        if not os.path.exists(data_file):
-            print("Файл с данными не найден. Сначала запустите select_input_files.py")
-            sys.exit(1)
-            
         # Initialize the query tool
         query_tool = CustomsQueryTool()
         
+        # Проверяем индекс
+        query_tool.setup_index()
+        logger.info("Проверка индекса завершена")
+        
         # Example questions
         example_questions = [
-            "What is the total gross weight of all declarations?",
-            "Show me the top 5 trading countries by invoice value",
-            "What are the average customs values per product code?",
-            "List all declarations with special mark 'ZZ'",
-            "Show me the distribution of delivery terms"
+            "Чи розмитнювалась на волині автомобіль АУДІ",
+            "Покажи топ 5 країн за вартістю товарів",
+            "Яка загальна вага всіх товарів?",
+            "Які найпопулярніші умови поставки?"
         ]
         
         # Process each question
         for question in example_questions:
-            print(f"\nQuestion: {question}")
+            print(f"\nВопрос: {question}")
             print("=" * 50)
             response = query_tool.query_data(question)
-            print(f"Answer: {response}\n")
+            print(f"Ответ: {response}\n")
             
     except Exception as e:
-        logger.error(f"Error in main execution: {str(e)}")
+        logger.error(f"Ошибка выполнения: {str(e)}")
         sys.exit(1)
 
 if __name__ == "__main__":

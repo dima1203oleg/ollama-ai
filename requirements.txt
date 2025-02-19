@@ -13,8 +13,8 @@ httpx>=0.26.0
 aiohttp>=3.9.3
 
 # Data processing
-pandas==2.2.0
-numpy==1.26.4
+pandas>=2.2.0  # Изменено с == на >= для большей гибкости
+numpy>=1.26.0
 pyarrow==19.0.0  # Added for better pandas performance
 
 # Utilities
