@@ -156,23 +156,24 @@ def get_user_selection(max_num: int) -> Set[int]:
         return set(range(1, max_num + 1))
 
 def process_file(input_file: str, client: OpenSearch, index_name: str) -> None:
-    """Обработка входного файла и сохранение в data/customs_data.csv"""
     data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data')
     os.makedirs(data_dir, exist_ok=True)
     output_file = os.path.join(data_dir, 'customs_data.csv')
     
     try:
-        # Читаем CSV с учетом специального форматирования
-        df = pd.read_csv(input_file, 
-                        delimiter=';', 
-                        encoding='utf-8',
-                        decimal=',',
-                        thousands=' ',
-                        skiprows=1)
+        # Читаємо CSV без пропуску рядків, якщо заголовки першого рядка коректні
+        df = pd.read_csv(
+            input_file, 
+            delimiter=';', 
+            encoding='utf-8',
+            decimal=',',
+            thousands=' '
+            # прибрано параметр skiprows
+        )
         
         print(f"Доступные колонки в файле: {df.columns.tolist()}")
         
-        # Обновленный маппинг колонок
+        # Обновлений маппинг колонок
         column_mapping = {
             'Дата оформлення': 'processing_date',
             'Опис товару': 'product_description',
@@ -210,30 +211,29 @@ def process_file(input_file: str, client: OpenSearch, index_name: str) -> None:
             'пільгова': 'preferential_rate',
             'повна': 'full_rate'
         }
-
-        # Создаем новый DataFrame с переименованными колонками
+        
+        # Якщо заголовки у CSV відрізняються, необхідно або відкоригувати column_mapping,
+        # або задати параметр names для read_csv.
         processed_df = df[column_mapping.keys()].rename(columns=column_mapping)
         
-        # Добавляем номер позиции
+        # Решта обробки і збереження даних...
         processed_df['item_number'] = range(1, len(processed_df) + 1)
         
-        # Преобразование даты
-        processed_df['processing_date'] = pd.to_datetime(processed_df['processing_date'], format='%d.%m.%y').dt.strftime('%Y-%m-%d')
+        processed_df['processing_date'] = pd.to_datetime(
+            processed_df['processing_date'], format='%d.%m.%y'
+        ).dt.strftime('%Y-%m-%d')
         
-        # Заполняем пустые значения
         for col in processed_df.columns:
             if col in ['quantity', 'invoice_value', 'gross_weight', 'net_weight', 'customs_weight']:
                 processed_df[col] = processed_df[col].fillna(0)
             else:
                 processed_df[col] = processed_df[col].fillna('')
 
-        # Сохранение результата
         if os.path.exists(output_file):
             processed_df.to_csv(output_file, mode='w', index=False)
         else:
             processed_df.to_csv(output_file, index=False)
             
-        # Загружаем данные в OpenSearch
         index_documents(client, processed_df, index_name)
         
         logger.info(f"Файл успешно обработан: {os.path.basename(input_file)}")
@@ -291,4 +291,8 @@ def main():
         return
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nОперацію перервано користувачем")
+        exit(0)
